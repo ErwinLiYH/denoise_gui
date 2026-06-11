@@ -94,7 +94,8 @@ def _denoise_zipenhancer(audio: np.ndarray, sr: int) -> np.ndarray:
 # ---------------------------------------------------------------------------
 # DPDFNet
 # ---------------------------------------------------------------------------
-def _denoise_dpdfnet(audio: np.ndarray, sr: int, model_name: str) -> np.ndarray:
+def _denoise_dpdfnet(audio: np.ndarray, sr: int, model_name: str,
+                     attn_limit_db: float = 12) -> np.ndarray:
     """DPDFNet 降噪"""
     import dpdfnet
 
@@ -111,14 +112,17 @@ def _denoise_dpdfnet(audio: np.ndarray, sr: int, model_name: str) -> np.ndarray:
         audio = audio[:, 0]
 
     audio = audio.astype(np.float32)
-    enhanced = dpdfnet.enhance(audio, sample_rate=sr, model=model_name, attn_limit_db=12)
+    enhanced = dpdfnet.enhance(
+        audio, sample_rate=sr, model=model_name, attn_limit_db=attn_limit_db,
+    )
     return enhanced
 
 
 # ---------------------------------------------------------------------------
 # 统一接口
 # ---------------------------------------------------------------------------
-def denoise(audio: np.ndarray, sr: int, model_name: str) -> np.ndarray:
+def denoise(audio: np.ndarray, sr: int, model_name: str,
+            attn_limit_db: float = 12) -> np.ndarray:
     """
     对音频数组降噪。
 
@@ -127,6 +131,8 @@ def denoise(audio: np.ndarray, sr: int, model_name: str) -> np.ndarray:
     audio : np.ndarray  输入音频 (shape: (N,) 或 (N, C))
     sr : int            采样率
     model_name : str    模型名称，见 MODEL_NAMES
+    attn_limit_db : float  DPDFNet 降噪强度 (dB)，越大越温和，默认 12
+                           ZipEnhancer 忽略此参数
 
     返回
     ----
@@ -135,8 +141,8 @@ def denoise(audio: np.ndarray, sr: int, model_name: str) -> np.ndarray:
     model_name = model_name.strip()
     if model_name == "zipenhancer":
         return _denoise_zipenhancer(audio, sr)
-    elif model_name in MODEL_NAMES:  # 精确匹配，避免 startswith 受不可见字符影响
-        return _denoise_dpdfnet(audio, sr, model_name)
+    elif model_name in MODEL_NAMES:
+        return _denoise_dpdfnet(audio, sr, model_name, attn_limit_db=attn_limit_db)
     else:
         raise ValueError(f"未知模型: {model_name}，可选: {MODEL_NAMES}")
 

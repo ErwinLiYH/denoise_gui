@@ -164,6 +164,59 @@ def merge_audio(video_path: str, new_audio_path: str, output_path: str):
         )
 
 
+def count_audio_streams(video_path: str) -> int:
+    """统计视频中的音轨数量"""
+    probe_cmd = [
+        _FFPROBE_PATH, "-v", "error",
+        "-select_streams", "a",
+        "-show_entries", "stream=index",
+        "-of", "csv=p=0",
+        video_path,
+    ]
+    probe = subprocess.run(probe_cmd, capture_output=True, text=True)
+    if probe.returncode != 0 or not probe.stdout.strip():
+        return 0
+    lines = [l for l in probe.stdout.strip().split("\n") if l.strip()]
+    return len(lines)
+
+
+def add_audio_track(video_path: str, new_audio_path: str,
+                    output_path: str, track_title: str):
+    """
+    将降噪音频追加为新的音轨，保留原视频所有音轨。
+
+    - 原视频流全部 copy 不重编码
+    - 新音轨按容器选择编码器，metadata title 设为 track_title
+    """
+    _, ext = os.path.splitext(output_path)
+    ext = ext.lower()
+    existing = count_audio_streams(video_path)
+    new_track_index = existing  # 新音轨在输出中的索引
+
+    # 按容器选编码器
+    if ext in (".mkv", ".webm"):
+        codec = "libvorbis"
+    elif ext in (".avi",):
+        codec = "mp3"
+    else:
+        codec = "aac"
+
+    common = [
+        "-i", video_path,
+        "-i", new_audio_path,
+        "-map", "0",            # 原视频所有流
+        "-map", "1:a:0",        # 新音频
+        "-c", "copy",          # 所有流默认 copy
+        "-c:a:" + str(new_track_index), codec,
+        "-b:a:" + str(new_track_index), "192k",
+        "-metadata:s:a:" + str(new_track_index),
+        "title=" + track_title,
+        "-shortest",
+        output_path,
+    ]
+    _run_ffmpeg(common, description="添加音轨")
+
+
 def cleanup(paths: list):
     """清理临时文件"""
     for p in paths:

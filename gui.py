@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from video_utils import (
     check_ffmpeg, set_ffmpeg_paths, extract_audio, merge_audio, cleanup,
+    add_audio_track,
 )
 from denoiser import denoise, MODEL_NAMES, get_model_display_names
 
@@ -28,7 +29,7 @@ class DenoiseApp:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("视频音频降噪工具")
-        self.root.geometry("620x360")
+        self.root.geometry("620x460")
         self.root.resizable(True, False)
 
         # ── ffmpeg 检测 ──
@@ -43,9 +44,11 @@ class DenoiseApp:
 
         # ── 状态变量 ──
         self.video_path = tk.StringVar()
-        self.model_display = tk.StringVar(value=self._model_display_names[2])  # 默认 dpdfnet2
+        self.model_display = tk.StringVar(value=self._model_display_names[6])  # 默认 dpdfnet8 48khz
         self.output_path = tk.StringVar()
         self.status_text = tk.StringVar(value="就绪，请选择视频文件")
+        self.output_mode = tk.StringVar(value="add")  # replace / add
+        self.attn_db_var = tk.IntVar(value=12)
         self.processing = False
 
         # 消息队列（后台线程 → UI）
@@ -139,14 +142,6 @@ class DenoiseApp:
         root = self.root
         pad = {"padx": 12, "pady": 6}
 
-        # ── 菜单栏 ──
-        menubar = tk.Menu(root)
-        file_menu = tk.Menu(menubar, tearoff=0)
-        file_menu.add_command(label="另存为...", command=self._choose_output)
-        file_menu.add_separator()
-        file_menu.add_command(label="退出", command=root.quit)
-        menubar.add_cascade(label="文件", menu=file_menu)
-        root.config(menu=menubar)
 
         main = ttk.Frame(root, padding=16)
         main.pack(fill="both", expand=True)
@@ -154,7 +149,8 @@ class DenoiseApp:
         # ── 第 1 行：选择视频 ──
         row1 = ttk.Frame(main)
         row1.pack(fill="x", **pad)
-        ttk.Button(row1, text="选择视频", command=self._choose_video).pack(side="left")
+        self.choose_btn = ttk.Button(row1, text="选择视频", command=self._choose_video)
+        self.choose_btn.pack(side="left")
         ttk.Label(row1, textvariable=self.video_path, foreground="gray").pack(
             side="left", padx=8, fill="x", expand=True
         )
@@ -171,8 +167,38 @@ class DenoiseApp:
             width=40,
         )
         self.model_combo.pack(side="left", padx=8)
+        self.model_combo.bind("<<ComboboxSelected>>", self._on_model_changed)
 
-        # ── 第 3 行：输出路径 ──
+        # ── 第 3 行：输出模式 ──
+        row_mode = ttk.Frame(main)
+        row_mode.pack(fill="x", **pad)
+        ttk.Label(row_mode, text="输出模式：").pack(side="left")
+        self.radio_replace = ttk.Radiobutton(
+            row_mode, text="替换原音轨", variable=self.output_mode, value="replace",
+        )
+        self.radio_replace.pack(side="left", padx=(4, 16))
+        self.radio_add = ttk.Radiobutton(
+            row_mode, text="添加为新音轨", variable=self.output_mode, value="add",
+        )
+        self.radio_add.pack(side="left")
+
+        # ── 第 4 行：降噪质量（仅 DPDFNet） ──
+        row_attn = ttk.Frame(main)
+        row_attn.pack(fill="x", **pad)
+        ttk.Label(row_attn, text="降噪质量：").pack(side="left")
+        self.attn_spinbox = ttk.Spinbox(
+            row_attn, from_=0, to=30, increment=1, width=5,
+            textvariable=self.attn_db_var,
+        )
+        self.attn_spinbox.pack(side="left", padx=4)
+        self.attn_hint_label = ttk.Label(
+            row_attn,
+            text="0~30，越大越温和（保真度高）；越小降噪越激进（去噪强）。推荐 6~12",
+            foreground="gray",
+        )
+        self.attn_hint_label.pack(side="left", padx=4)
+
+        # ── 第 5 行：输出路径 ──
         row3 = ttk.Frame(main)
         row3.pack(fill="x", **pad)
         ttk.Label(row3, text="输出路径：").pack(side="left")
@@ -180,7 +206,7 @@ class DenoiseApp:
             side="left", padx=8, fill="x", expand=True
         )
 
-        # ── 第 4 行：按钮 + 进度条 ──
+        # ── 第 6 行：按钮 + 进度条 ──
         row4 = ttk.Frame(main)
         row4.pack(fill="x", **pad)
         self.denoise_btn = ttk.Button(
@@ -193,7 +219,7 @@ class DenoiseApp:
         )
         self.progress.pack(side="left", fill="x", expand=True)
 
-        # ── 第 5 行：状态 ──
+        # ── 第 7 行：状态 ──
         row5 = ttk.Frame(main)
         row5.pack(fill="x", **pad)
         ttk.Label(row5, textvariable=self.status_text, foreground="#224466").pack(
@@ -203,6 +229,21 @@ class DenoiseApp:
     # ------------------------------------------------------------------
     # 事件处理
     # ------------------------------------------------------------------
+    def _on_model_changed(self, event=None):
+        """模型切换时联动启用/禁用降噪质量控件"""
+        if self._model_key == "zipenhancer":
+            self.attn_spinbox.config(state="disabled")
+            self.attn_hint_label.config(
+                text="ZipEnhancer 不支持此参数",
+                foreground="gray",
+            )
+        else:
+            self.attn_spinbox.config(state="normal")
+            self.attn_hint_label.config(
+                text="0~30，越大越温和（保真度高）；越小降噪越激进（去噪强）。推荐 6~12",
+                foreground="gray",
+            )
+
     def _choose_video(self):
         path = filedialog.askopenfilename(
             title="选择视频文件",
@@ -240,7 +281,22 @@ class DenoiseApp:
     @property
     def _model_key(self) -> str:
         """当前选择的模型内部 key"""
-        return self._model_key_of.get(self.model_display.get(), MODEL_NAMES[2])
+        return self._model_key_of.get(self.model_display.get(), MODEL_NAMES[6])
+
+    def _set_controls_state(self, disabled: bool):
+        """统一控制所有交互控件的启用/禁用"""
+        new_state = "disabled" if disabled else "normal"
+        combo_state = "disabled" if disabled else "readonly"
+        self.choose_btn.config(state=new_state)
+        self.denoise_btn.config(state=new_state)
+        self.model_combo.config(state=combo_state)
+        self.radio_replace.config(state=new_state)
+        self.radio_add.config(state=new_state)
+        # Spinbox 只在 DPDFNet 模型下恢复
+        if disabled:
+            self.attn_spinbox.config(state="disabled")
+        else:
+            self._on_model_changed()
 
     def _start_denoise(self):
         if self.processing:
@@ -253,7 +309,7 @@ class DenoiseApp:
             return
 
         self.processing = True
-        self.denoise_btn.config(state="disabled")
+        self._set_controls_state(True)
         self.progress.start(10)
         self.status_text.set("正在准备...")
 
@@ -261,10 +317,12 @@ class DenoiseApp:
         video_path = self.video_path.get()
         model_key = self._model_key
         output_path = self.output_path.get()
+        output_mode = self.output_mode.get()
+        attn_limit_db = float(self.attn_db_var.get())
 
         thread = threading.Thread(
             target=self._run_pipeline,
-            args=(video_path, model_key, output_path),
+            args=(video_path, model_key, output_path, output_mode, attn_limit_db),
             daemon=True,
         )
         thread.start()
@@ -272,7 +330,8 @@ class DenoiseApp:
     # ------------------------------------------------------------------
     # 后台 pipeline
     # ------------------------------------------------------------------
-    def _run_pipeline(self, video_path: str, model_key: str, output_path: str):
+    def _run_pipeline(self, video_path: str, model_key: str, output_path: str,
+                      output_mode: str, attn_limit_db: float):
         """后台线程：提取 → 降噪 → 合成"""
         tmp_wav = None
         try:
@@ -290,16 +349,25 @@ class DenoiseApp:
 
             import soundfile as sf
             audio, sr_read = sf.read(tmp_wav)
-            # soundfile 读取的可能和 ffprobe 不同，以读取为准
             sr = sr_read
-            enhanced = denoise(audio, sr, model_key)
+            enhanced = denoise(audio, sr, model_key, attn_limit_db=attn_limit_db)
 
             # 写回临时 WAV
             sf.write(tmp_wav, enhanced, sr)
 
             # ── 阶段 3：合成视频 ──
             self._post_progress("正在合成视频...")
-            merge_audio(video_path, tmp_wav, output_path)
+            if output_mode == "add":
+                # 构建音轨标题
+                if model_key == "zipenhancer":
+                    track_title = "ZipEnhancer"
+                else:
+                    track_title = (
+                        f"DPDFNet {model_key} (attn_limit_db={attn_limit_db:.0f}dB)"
+                    )
+                add_audio_track(video_path, tmp_wav, output_path, track_title)
+            else:
+                merge_audio(video_path, tmp_wav, output_path)
 
             # ── 完成 ──
             self.msg_queue.put((MSG_DONE, output_path))
@@ -328,14 +396,14 @@ class DenoiseApp:
                     self.progress.config(mode="determinate", value=100)
                     self.status_text.set("完成！降噪视频已保存")
                     self.processing = False
-                    self.denoise_btn.config(state="normal")
+                    self._set_controls_state(False)
                     messagebox.showinfo("完成", f"降噪完成！\n\n已保存至：\n{msg[1]}")
                 elif msg_type == MSG_ERROR:
                     self.progress.stop()
                     self.progress.config(mode="indeterminate")
                     self.status_text.set("出错")
                     self.processing = False
-                    self.denoise_btn.config(state="normal")
+                    self._set_controls_state(False)
                     messagebox.showerror("错误", f"处理失败：\n{msg[1]}")
         except queue.Empty:
             pass
