@@ -17,6 +17,7 @@ from video_utils import (
     add_audio_track,
 )
 from denoiser import denoise, MODEL_NAMES, get_model_display_names
+from i18n import TEXTS
 
 
 # ---------------------------------------------------------------------------
@@ -32,10 +33,10 @@ MSG_QUEUE_DONE  = "queue_done"   # data = (success_count, fail_count)
 
 
 class JobStatus(Enum):
-    PENDING = "⏳等待"
-    RUNNING = "🔄处理中"
-    DONE    = "✅完成"
-    ERROR   = "❌失败"
+    PENDING = "pending"
+    RUNNING = "running"
+    DONE    = "done"
+    ERROR   = "error"
 
 
 @dataclass
@@ -58,7 +59,10 @@ class JobConfig:
 class DenoiseApp:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("视频音频降噪工具")
+        # ── 语言 ──
+        self.lang = "zh"  # 默认中文
+
+        self.root.title(self.t("window_title"))
         self.root.geometry("920x820")
         self.root.resizable(True, True)
 
@@ -75,7 +79,10 @@ class DenoiseApp:
         # ── 状态变量 ──
         self._pending_files: list[str] = []  # 待加入队列的已选文件路径
         self.model_display = tk.StringVar(value=self._model_display_names[6])  # 默认 dpdfnet8 48khz
-        self.status_text = tk.StringVar(value="未选择文件，点击下方选择按钮添加视频")
+        self.status_text = tk.StringVar()
+        self._status_key = "pending_placeholder"
+        self._status_fmt = {}
+        self.status_text.set(self.t("pending_placeholder"))
         self.output_mode = tk.StringVar(value="add")  # replace / add
         self.attn_db_var = tk.IntVar(value=12)
         self.processing = False
@@ -90,6 +97,73 @@ class DenoiseApp:
         self._poll_queue()
 
     # ------------------------------------------------------------------
+    # 国际化 / i18n
+    # ------------------------------------------------------------------
+    def t(self, key: str, **fmt) -> str:
+        """Look up a translated string by key, optionally formatting with kwargs."""
+        s = TEXTS[self.lang].get(key, key)
+        if fmt:
+            s = s.format(**fmt)
+        return s
+
+    def _toggle_language(self):
+        """Switch between zh / en and refresh all UI text."""
+        self.lang = "en" if self.lang == "zh" else "zh"
+        self._retranslate()
+
+    def _set_status(self, key: str, **fmt):
+        """Set status_text and remember the key for re-rendering on language switch."""
+        self._status_key = key
+        self._status_fmt = fmt
+        self.status_text.set(self.t(key, **fmt))
+
+    def _update_status_text(self):
+        """Re-render the current status text in the current language."""
+        if self._status_key:
+            self.status_text.set(self.t(self._status_key, **self._status_fmt))
+
+    def _bi(self, key: str, **fmt) -> str:
+        """Return a bilingual (zh + en) version of a text, for dialogs shown
+        before the user has chosen a language."""
+        zh = TEXTS["zh"].get(key, key).format(**fmt)
+        en = TEXTS["en"].get(key, key).format(**fmt)
+        return f"{zh}\n――――――――――\n{en}"
+
+    def _retranslate(self):
+        """Reconfigure all static widget text for the current language."""
+        self.root.title(self.t("window_title"))
+        self._lang_btn.config(text=self.t("lang_btn"))
+
+        # config section
+        self._config_frame.config(text=self.t("config_frame"))
+        self.choose_btn.config(text=self.t("choose_btn"))
+        self.add_btn.config(text=self.t("add_btn"))
+        self._hint_label.config(text=self.t("hint_label"))
+        self._model_label.config(text=self.t("model_label"))
+        self._output_mode_label.config(text=self.t("output_mode_label"))
+        self.radio_replace.config(text=self.t("output_replace"))
+        self.radio_add.config(text=self.t("output_add"))
+        self._attn_label.config(text=self.t("attn_label"))
+        self._on_model_changed()  # updates attn_hint_label text
+
+        # queue section
+        self._queue_frame.config(text=self.t("queue_frame"))
+        self.queue_tree.heading("#", text=self.t("col_index"))
+        self.queue_tree.heading("video", text=self.t("col_video"))
+        self.queue_tree.heading("model", text=self.t("col_model"))
+        self.queue_tree.heading("mode", text=self.t("col_mode"))
+        self.queue_tree.heading("output", text=self.t("col_output"))
+        self.queue_tree.heading("status", text=self.t("col_status"))
+        self.remove_btn.config(text=self.t("remove_btn"))
+        self.clear_btn.config(text=self.t("clear_btn"))
+        self.start_queue_btn.config(text=self.t("start_btn"))
+
+        # refresh data-driven displays
+        self._update_status_text()
+        self._refresh_pending_display()
+        self._refresh_tree()
+
+    # ------------------------------------------------------------------
     # ffmpeg 路径配置弹窗
     # ------------------------------------------------------------------
     def _ask_ffmpeg_path(self) -> bool:
@@ -99,21 +173,18 @@ class DenoiseApp:
         """
         while True:
             answer = messagebox.askyesno(
-                "ffmpeg 未找到",
-                "未在系统 PATH 中找到 ffmpeg！\n\n"
-                "请手动定位 ffmpeg 可执行文件（如 ffmpeg.exe）。\n"
-                "是否现在选择？\n\n"
-                "（选「否」将退出程序）",
+                self._bi("ffmpeg_not_found_title"),
+                self._bi("ffmpeg_not_found_msg"),
             )
             if not answer:
                 return False
 
             # 选择 ffmpeg
             ffmpeg_path = filedialog.askopenfilename(
-                title="请选择 ffmpeg 可执行文件",
+                title=self._bi("ffmpeg_select_title"),
                 filetypes=[
-                    ("ffmpeg", "ffmpeg.exe ffmpeg"),
-                    ("所有文件", "*.*"),
+                    (self._bi("ffmpeg_filetype"), "ffmpeg.exe ffmpeg"),
+                    (self._bi("all_files"), "*.*"),
                 ],
             )
             if not ffmpeg_path:
@@ -132,14 +203,14 @@ class DenoiseApp:
             # 如果自动推断的 ffprobe 不存在，让用户手动选
             if not (os.path.isfile(ffprobe_path) and os.access(ffprobe_path, os.X_OK)):
                 messagebox.showinfo(
-                    "请选择 ffprobe",
-                    "同目录下未找到 ffprobe，请手动选择 ffprobe 可执行文件。",
+                    self._bi("ffprobe_select_title"),
+                    self._bi("ffprobe_not_found_msg"),
                 )
                 ffprobe_path = filedialog.askopenfilename(
-                    title="请选择 ffprobe 可执行文件",
+                    title=self._bi("ffprobe_select_title"),
                     filetypes=[
-                        ("ffprobe", "ffprobe.exe ffprobe"),
-                        ("所有文件", "*.*"),
+                        (self._bi("ffprobe_filetype"), "ffprobe.exe ffprobe"),
+                        (self._bi("all_files"), "*.*"),
                     ],
                 )
                 if not ffprobe_path:
@@ -149,21 +220,22 @@ class DenoiseApp:
             from video_utils import _validate_binary
             if not _validate_binary(ffmpeg_path):
                 messagebox.showerror(
-                    "无效的 ffmpeg",
-                    f"所选文件不是有效的 ffmpeg：\n{ffmpeg_path}\n\n请重新选择。",
+                    self._bi("ffmpeg_invalid_title"),
+                    self._bi("ffmpeg_invalid_msg", path=ffmpeg_path),
                 )
                 continue
             if not _validate_binary(ffprobe_path):
                 messagebox.showerror(
-                    "无效的 ffprobe",
-                    f"所选文件不是有效的 ffprobe：\n{ffprobe_path}\n\n请重新选择。",
+                    self._bi("ffprobe_invalid_title"),
+                    self._bi("ffprobe_invalid_msg", path=ffprobe_path),
                 )
                 continue
 
             set_ffmpeg_paths(ffmpeg_path, ffprobe_path)
             messagebox.showinfo(
-                "配置成功",
-                f"ffmpeg 已配置：\n{ffmpeg_path}\nffprobe 已配置：\n{ffprobe_path}\n\n现在可以正常使用了。",
+                self._bi("ffmpeg_config_ok_title"),
+                self._bi("ffmpeg_config_ok_msg",
+                       ffmpeg=ffmpeg_path, ffprobe=ffprobe_path),
             )
             return True
 
@@ -177,14 +249,23 @@ class DenoiseApp:
         main = ttk.Frame(root, padding=12)
         main.pack(fill="both", expand=True)
 
+        # ── 顶部语言切换栏 ──
+        top_bar = ttk.Frame(main)
+        top_bar.pack(fill="x", pady=(0, 4))
+        self._lang_btn = ttk.Button(
+            top_bar, text=self.t("lang_btn"), width=8,
+            command=self._toggle_language,
+        )
+        self._lang_btn.pack(side="right")
+
         # ==============================================================
         # 上半部分：任务配置
         # ==============================================================
-        config_frame = ttk.LabelFrame(main, text="任务配置", padding=10)
-        config_frame.pack(fill="x", pady=(0, 8))
+        self._config_frame = ttk.LabelFrame(main, text=self.t("config_frame"), padding=10)
+        self._config_frame.pack(fill="x", pady=(0, 8))
 
         # ── 第 1 行：已选文件列表 ──
-        pending_frame = ttk.Frame(config_frame)
+        pending_frame = ttk.Frame(self._config_frame)
         pending_frame.pack(fill="x", **pad)
         self.pending_text = tk.Text(
             pending_frame, height=10, state="disabled",
@@ -200,24 +281,26 @@ class DenoiseApp:
         self._refresh_pending_display()
 
         # ── 第 2 行：选择视频 / 加入队列 ──
-        row1 = ttk.Frame(config_frame)
+        row1 = ttk.Frame(self._config_frame)
         row1.pack(fill="x", **pad)
-        self.choose_btn = ttk.Button(row1, text="选择视频", command=self._choose_video)
+        self.choose_btn = ttk.Button(row1, text=self.t("choose_btn"), command=self._choose_video)
         self.choose_btn.pack(side="left", padx=(0, 8))
-        self.add_btn = ttk.Button(row1, text="加入队列", command=self._add_to_queue)
+        self.add_btn = ttk.Button(row1, text=self.t("add_btn"), command=self._add_to_queue)
         self.add_btn.pack(side="left")
 
         # ── 第 3 行：注释 ──
-        ttk.Label(
-            config_frame,
-            text="选择视频可以多次多个选择，点击加入队列将上方所选视频以下方配置加入队列",
+        self._hint_label = ttk.Label(
+            self._config_frame,
+            text=self.t("hint_label"),
             foreground="gray", font=("TkDefaultFont", 8),
-        ).pack(fill="x", padx=12, pady=(0, 6))
+        )
+        self._hint_label.pack(fill="x", padx=12, pady=(0, 6))
 
         # ── 第 4 行：模型选择 ──
-        row2 = ttk.Frame(config_frame)
+        row2 = ttk.Frame(self._config_frame)
         row2.pack(fill="x", **pad)
-        ttk.Label(row2, text="降噪模型：").pack(side="left")
+        self._model_label = ttk.Label(row2, text=self.t("model_label"))
+        self._model_label.pack(side="left")
         self.model_combo = ttk.Combobox(
             row2,
             textvariable=self.model_display,
@@ -229,22 +312,24 @@ class DenoiseApp:
         self.model_combo.bind("<<ComboboxSelected>>", self._on_model_changed)
 
         # ── 第 4 行：输出模式 ──
-        row_mode = ttk.Frame(config_frame)
+        row_mode = ttk.Frame(self._config_frame)
         row_mode.pack(fill="x", **pad)
-        ttk.Label(row_mode, text="输出模式：").pack(side="left")
+        self._output_mode_label = ttk.Label(row_mode, text=self.t("output_mode_label"))
+        self._output_mode_label.pack(side="left")
         self.radio_replace = ttk.Radiobutton(
-            row_mode, text="替换原音轨", variable=self.output_mode, value="replace",
+            row_mode, text=self.t("output_replace"), variable=self.output_mode, value="replace",
         )
         self.radio_replace.pack(side="left", padx=(4, 16))
         self.radio_add = ttk.Radiobutton(
-            row_mode, text="添加为新音轨", variable=self.output_mode, value="add",
+            row_mode, text=self.t("output_add"), variable=self.output_mode, value="add",
         )
         self.radio_add.pack(side="left")
 
         # ── 第 5 行：降噪质量（仅 DPDFNet） ──
-        row_attn = ttk.Frame(config_frame)
+        row_attn = ttk.Frame(self._config_frame)
         row_attn.pack(fill="x", **pad)
-        ttk.Label(row_attn, text="降噪质量：").pack(side="left")
+        self._attn_label = ttk.Label(row_attn, text=self.t("attn_label"))
+        self._attn_label.pack(side="left")
         self.attn_spinbox = ttk.Spinbox(
             row_attn, from_=0, to=30, increment=1, width=5,
             textvariable=self.attn_db_var,
@@ -252,7 +337,7 @@ class DenoiseApp:
         self.attn_spinbox.pack(side="left", padx=4)
         self.attn_hint_label = ttk.Label(
             row_attn,
-            text="0~30，越大越温和（保真度高）；越小降噪越激进（去噪强）。推荐 6~12",
+            text=self.t("attn_hint_default"),
             foreground="gray",
         )
         self.attn_hint_label.pack(side="left", padx=4)
@@ -260,21 +345,21 @@ class DenoiseApp:
         # ==============================================================
         # 中间部分：任务队列
         # ==============================================================
-        queue_frame = ttk.LabelFrame(main, text="任务队列", padding=10)
-        queue_frame.pack(fill="both", expand=True, pady=(0, 8))
+        self._queue_frame = ttk.LabelFrame(main, text=self.t("queue_frame"), padding=10)
+        self._queue_frame.pack(fill="both", expand=True, pady=(0, 8))
 
         # Treeview
         columns = ("#", "video", "model", "mode", "output", "status")
         self.queue_tree = ttk.Treeview(
-            queue_frame, columns=columns, show="headings",
+            self._queue_frame, columns=columns, show="headings",
             height=8, selectmode="extended",
         )
-        self.queue_tree.heading("#", text="#")
-        self.queue_tree.heading("video", text="视频文件")
-        self.queue_tree.heading("model", text="降噪模型")
-        self.queue_tree.heading("mode", text="输出模式")
-        self.queue_tree.heading("output", text="输出路径")
-        self.queue_tree.heading("status", text="状态")
+        self.queue_tree.heading("#", text=self.t("col_index"))
+        self.queue_tree.heading("video", text=self.t("col_video"))
+        self.queue_tree.heading("model", text=self.t("col_model"))
+        self.queue_tree.heading("mode", text=self.t("col_mode"))
+        self.queue_tree.heading("output", text=self.t("col_output"))
+        self.queue_tree.heading("status", text=self.t("col_status"))
 
         self.queue_tree.column("#", width=40, anchor="center", stretch=False)
         self.queue_tree.column("video", width=180, anchor="w")
@@ -283,7 +368,7 @@ class DenoiseApp:
         self.queue_tree.column("output", width=220, anchor="w")
         self.queue_tree.column("status", width=100, anchor="center")
 
-        vsb = ttk.Scrollbar(queue_frame, orient="vertical", command=self.queue_tree.yview)
+        vsb = ttk.Scrollbar(self._queue_frame, orient="vertical", command=self.queue_tree.yview)
         self.queue_tree.configure(yscrollcommand=vsb.set)
 
         self.queue_tree.pack(side="left", fill="both", expand=True)
@@ -293,11 +378,11 @@ class DenoiseApp:
         queue_btn_row = ttk.Frame(main)
         queue_btn_row.pack(fill="x", pady=(0, 8))
         self.remove_btn = ttk.Button(
-            queue_btn_row, text="移除选中", command=self._remove_selected
+            queue_btn_row, text=self.t("remove_btn"), command=self._remove_selected
         )
         self.remove_btn.pack(side="left", padx=(0, 8))
         self.clear_btn = ttk.Button(
-            queue_btn_row, text="清空全部", command=self._clear_queue
+            queue_btn_row, text=self.t("clear_btn"), command=self._clear_queue
         )
         self.clear_btn.pack(side="left")
 
@@ -308,7 +393,7 @@ class DenoiseApp:
         bottom.pack(fill="x")
 
         self.start_queue_btn = ttk.Button(
-            bottom, text="▶ 开始处理队列", command=self._start_queue
+            bottom, text=self.t("start_btn"), command=self._start_queue
         )
         self.start_queue_btn.pack(side="left", padx=(0, 12))
 
@@ -332,34 +417,38 @@ class DenoiseApp:
         if self._model_key == "zipenhancer":
             self.attn_spinbox.config(state="disabled")
             self.attn_hint_label.config(
-                text="ZipEnhancer 不支持此参数",
+                text=self.t("attn_hint_zipenhancer"),
                 foreground="gray",
             )
         else:
             self.attn_spinbox.config(state="normal")
             self.attn_hint_label.config(
-                text="0~30，越大越温和（保真度高）；越小降噪越激进（去噪强）。推荐 6~12",
+                text=self.t("attn_hint_default"),
                 foreground="gray",
             )
 
     def _choose_video(self):
         """多选视频文件，追加到待添加列表"""
         paths = filedialog.askopenfilenames(
-            title="选择视频文件（可多选）",
+            title=self.t("video_select_title"),
             filetypes=[
-                ("视频文件", "*.mp4 *.mkv *.mov *.avi *.webm *.flv *.wmv"),
-                ("所有文件", "*.*"),
+                (self.t("video_filetype"), "*.mp4 *.mkv *.mov *.avi *.webm *.flv *.wmv"),
+                (self.t("all_files"), "*.*"),
             ],
         )
         if paths:
             self._pending_files.extend(paths)
             self._refresh_pending_display()
-            self.status_text.set(f"已选择 {len(self._pending_files)} 个文件，点击「加入队列」确认")
+            self._set_status(
+                "status_files_chosen", count=len(self._pending_files)
+            )
 
     def _add_to_queue(self):
         """将 _pending_files 中的所有文件按当前配置加入队列"""
         if not self._pending_files:
-            messagebox.showwarning("提示", "请先选择视频文件")
+            messagebox.showwarning(
+                self.t("msgbox_info"), self.t("msg_no_video_selected")
+            )
             return
 
         added = 0
@@ -377,12 +466,19 @@ class DenoiseApp:
 
         if added > 0:
             self._refresh_tree()
-        self.status_text.set(f"已添加 {added} 个视频到队列（共 {len(self.jobs)} 个任务）")
+        self._set_status(
+            "status_jobs_added", added=added, total=len(self.jobs)
+        )
 
     @property
     def _model_key(self) -> str:
         """当前选择的模型内部 key"""
         return self._model_key_of.get(self.model_display.get(), MODEL_NAMES[6])
+
+    def _job_status_display(self, job: JobConfig) -> str:
+        """Return the display string for a job's status in the current language."""
+        key = f"job_status_{job.status.value}"
+        return self.t(key)
 
     def _set_controls_state(self, disabled: bool):
         """统一控制所有交互控件的启用/禁用"""
@@ -411,7 +507,7 @@ class DenoiseApp:
         self.pending_text.delete("1.0", "end")
         if not self._pending_files:
             self.pending_text.insert(
-                "1.0", "未选择文件，点击下方选择按钮添加视频"
+                "1.0", self.t("pending_placeholder")
             )
         else:
             self.pending_text.insert("1.0", "\n".join(self._pending_files))
@@ -424,8 +520,8 @@ class DenoiseApp:
         if video_path in existing:
             basename = os.path.basename(video_path)
             messagebox.showwarning(
-                "重复视频",
-                f"视频「{basename}」已在队列中，已自动跳过。\n\n路径：{video_path}",
+                self.t("msg_duplicate_video_title"),
+                self.t("msg_duplicate_video", name=basename, path=video_path),
             )
             return False
 
@@ -454,23 +550,28 @@ class DenoiseApp:
             if 0 <= idx < len(self.jobs):
                 self.jobs.pop(idx)
         self._refresh_tree()
-        self.status_text.set(f"队列剩余 {len(self.jobs)} 个任务")
+        self._set_status(
+            "status_jobs_remaining", count=len(self.jobs)
+        )
 
     def _clear_queue(self):
         """清空全部任务"""
         if not self.jobs:
             return
-        if messagebox.askyesno("确认", f"确定要清空全部 {len(self.jobs)} 个任务吗？"):
+        if messagebox.askyesno(
+            self.t("msgbox_confirm"),
+            self.t("msg_clear_confirm", count=len(self.jobs)),
+        ):
             self.jobs.clear()
             self._refresh_tree()
-            self.status_text.set("队列已清空")
+            self._set_status("status_queue_cleared")
 
     def _refresh_tree(self):
         """全量刷新 Treeview"""
         for row in self.queue_tree.get_children():
             self.queue_tree.delete(row)
         for i, job in enumerate(self.jobs):
-            mode_text = "替换" if job.output_mode == "replace" else "添加"
+            mode_text = self.t("mode_replace") if job.output_mode == "replace" else self.t("mode_add")
             # DPDFNet 模型显示时追加降噪强度
             if job.model_key == "zipenhancer":
                 model_text = job.model_display
@@ -484,7 +585,7 @@ class DenoiseApp:
                     model_text,
                     mode_text,
                     job.output_path,
-                    job.status.value,
+                    self._job_status_display(job),
                 ),
             )
 
@@ -492,7 +593,7 @@ class DenoiseApp:
         """更新 Treeview 中某一行的显示（状态等）"""
         if 0 <= idx < len(self.jobs):
             job = self.jobs[idx]
-            mode_text = "替换" if job.output_mode == "replace" else "添加"
+            mode_text = self.t("mode_replace") if job.output_mode == "replace" else self.t("mode_add")
             if job.model_key == "zipenhancer":
                 model_text = job.model_display
             else:
@@ -505,7 +606,7 @@ class DenoiseApp:
                     model_text,
                     mode_text,
                     job.output_path,
-                    job.status.value,
+                    self._job_status_display(job),
                 ))
 
     # ------------------------------------------------------------------
@@ -516,15 +617,17 @@ class DenoiseApp:
         if self.processing:
             return
         if not self.jobs:
-            messagebox.showwarning("提示", "任务队列为空，请先添加任务")
+            messagebox.showwarning(
+                self.t("msgbox_info"), self.t("msg_queue_empty")
+            )
             return
 
         # 检查是否有已完成/失败的任务，重置为 pending
         has_processed = any(j.status in (JobStatus.DONE, JobStatus.ERROR) for j in self.jobs)
         if has_processed:
             if not messagebox.askyesno(
-                "队列中有已完成的任务",
-                "队列中包含之前已完成或失败的任务。\n是否重新运行整个队列？\n（选「否」将取消启动）"
+                self.t("msg_reprocess_title"),
+                self.t("msg_reprocess"),
             ):
                 return
             for j in self.jobs:
@@ -536,7 +639,9 @@ class DenoiseApp:
         self._set_controls_state(True)
         self.progress["maximum"] = len(self.jobs)
         self.progress["value"] = 0
-        self.status_text.set(f"开始处理队列（共 {len(self.jobs)} 个任务）...")
+        self._set_status(
+            "status_queue_start", count=len(self.jobs)
+        )
 
         # 快照当前队列（避免并发修改）
         jobs_snapshot = list(self.jobs)
@@ -557,17 +662,22 @@ class DenoiseApp:
 
             tmp_wav = None
             try:
-                self._post_progress(f"[{idx + 1}/{len(jobs)}] 正在提取音频：{job.video_basename}")
+                self._post_progress(
+                    self.t("progress_extract", idx=idx + 1, total=len(jobs),
+                           name=job.video_basename)
+                )
                 tmp_wav, sr, duration = extract_audio(job.video_path)
 
                 if duration > 0:
                     self._post_progress(
-                        f"[{idx + 1}/{len(jobs)}] 正在降噪：{job.video_basename}"
-                        f"（{int(duration // 60)}分{int(duration % 60)}秒）"
+                        self.t("progress_denoise_with_dur", idx=idx + 1, total=len(jobs),
+                               name=job.video_basename,
+                               min=int(duration // 60), sec=int(duration % 60))
                     )
                 else:
                     self._post_progress(
-                        f"[{idx + 1}/{len(jobs)}] 正在降噪：{job.video_basename}"
+                        self.t("progress_denoise", idx=idx + 1, total=len(jobs),
+                               name=job.video_basename)
                     )
 
                 import soundfile as sf
@@ -577,7 +687,10 @@ class DenoiseApp:
                                    attn_limit_db=job.attn_limit_db)
                 sf.write(tmp_wav, enhanced, sr)
 
-                self._post_progress(f"[{idx + 1}/{len(jobs)}] 正在合成视频：{job.video_basename}")
+                self._post_progress(
+                    self.t("progress_merge", idx=idx + 1, total=len(jobs),
+                           name=job.video_basename)
+                )
                 if job.output_mode == "add":
                     if job.model_key == "zipenhancer":
                         track_title = "ZipEnhancer"
@@ -625,8 +738,9 @@ class DenoiseApp:
                     idx = msg[1]
                     self._update_job_row(idx)
                     job = self.jobs[idx]
-                    self.status_text.set(
-                        f"正在处理 {idx + 1}/{len(self.jobs)} — {job.video_basename}"
+                    self._set_status(
+                        "status_processing", idx=idx + 1,
+                        total=len(self.jobs), name=job.video_basename
                     )
 
                 elif msg_type == MSG_JOB_DONE:
@@ -644,42 +758,55 @@ class DenoiseApp:
                     self.progress["value"] = len(self.jobs)
                     self.processing = False
                     self._set_controls_state(False)
-                    self.status_text.set(
-                        f"队列处理完毕：成功 {success} 个，失败 {fail} 个"
+                    self._set_status(
+                        "status_queue_done", success=success, fail=fail
                     )
                     # 构建摘要
-                    summary_lines = [f"队列处理完毕！\n成功：{success} 个\n失败：{fail} 个\n"]
+                    summary_lines = [
+                        self.t("msg_queue_done_summary",
+                               success=success, fail=fail)
+                    ]
                     for i, job in enumerate(self.jobs):
                         if job.status == JobStatus.ERROR:
                             summary_lines.append(
-                                f"  ✗ [{i+1}] {job.video_basename}\n"
-                                f"      原因：{job.error_message}"
+                                self.t("msg_queue_fail_item",
+                                       idx=i + 1, name=job.video_basename,
+                                       error=job.error_message)
                             )
                     if fail > 0:
                         messagebox.showwarning(
-                            "队列完成（有失败）",
+                            self.t("msg_queue_fail_title"),
                             "\n".join(summary_lines),
                         )
                     else:
-                        messagebox.showinfo("全部完成", "\n".join(summary_lines))
+                        messagebox.showinfo(
+                            self.t("msg_queue_done_title"),
+                            "\n".join(summary_lines),
+                        )
 
                 elif msg_type == MSG_DONE:
                     # 兼容旧的单任务消息（保留但不再触发）
                     self.progress.stop()
                     self.progress.config(mode="determinate", value=100)
-                    self.status_text.set("完成！降噪视频已保存")
+                    self._set_status("status_done_single")
                     self.processing = False
                     self._set_controls_state(False)
-                    messagebox.showinfo("完成", f"降噪完成！\n\n已保存至：\n{msg[1]}")
+                    messagebox.showinfo(
+                        self.t("msg_done_single_title"),
+                        self.t("msg_done_single", path=msg[1]),
+                    )
 
                 elif msg_type == MSG_ERROR:
                     # 兼容旧的单任务消息
                     self.progress.stop()
                     self.progress.config(mode="indeterminate")
-                    self.status_text.set("出错")
+                    self._set_status("status_error_single")
                     self.processing = False
                     self._set_controls_state(False)
-                    messagebox.showerror("错误", f"处理失败：\n{msg[1]}")
+                    messagebox.showerror(
+                        self.t("msg_error_single_title"),
+                        self.t("msg_error_single", msg=msg[1]),
+                    )
 
         except queue.Empty:
             pass
