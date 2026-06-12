@@ -6,6 +6,8 @@ A deep-learning-based video audio denoising tool supporting two model families:
 - **ZipEnhancer** (Alibaba Tongyi Lab / 阿里通义实验室) — 16kHz single-mic speech denoising, ModelScope pipeline
 - **DPDFNet** (CEVA) — multi-sample-rate speech enhancement, 6 variants available (baseline / dpdfnet2 / dpdfnet4 / dpdfnet8 / 48kHz series)
 
+![Screenshot](./Screenshot.png)
+
 ---
 
 ## Installation / 安装
