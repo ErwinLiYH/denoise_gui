@@ -16,7 +16,7 @@ from video_utils import (
     check_ffmpeg, set_ffmpeg_paths, extract_audio, merge_audio, cleanup,
     add_audio_track,
 )
-from denoiser import denoise, MODEL_NAMES, get_model_display_names
+from denoiser import denoise, MODEL_NAMES
 from i18n import TEXTS
 
 
@@ -73,7 +73,7 @@ class DenoiseApp:
                 return
 
         # ── 模型名称映射（显示名 → 内部 key） ──
-        self._model_display_names = get_model_display_names()
+        self._model_display_names = self._build_model_display_names()
         self._model_key_of = dict(zip(self._model_display_names, MODEL_NAMES))
 
         # ── 状态变量 ──
@@ -129,6 +129,20 @@ class DenoiseApp:
         en = TEXTS["en"].get(key, key).format(**fmt)
         return f"{zh}\n――――――――――\n{en}"
 
+    def _build_model_display_names(self) -> list:
+        """Build the list of model display names in the current language."""
+        return [self.t(f"model_display_{key}") for key in MODEL_NAMES]
+
+    def _rebuild_model_names(self):
+        """Rebuild model display names and combo values on language switch."""
+        old_key = self._model_key  # current selected model key
+        self._model_display_names = self._build_model_display_names()
+        self._model_key_of = dict(zip(self._model_display_names, MODEL_NAMES))
+        self.model_combo["values"] = self._model_display_names
+        # Restore the selection by finding the new display name for the old key
+        new_display = self.t(f"model_display_{old_key}")
+        self.model_display.set(new_display)
+
     def _retranslate(self):
         """Reconfigure all static widget text for the current language."""
         self.root.title(self.t("window_title"))
@@ -159,6 +173,7 @@ class DenoiseApp:
         self.start_queue_btn.config(text=self.t("start_btn"))
 
         # refresh data-driven displays
+        self._rebuild_model_names()
         self._update_status_text()
         self._refresh_pending_display()
         self._refresh_tree()

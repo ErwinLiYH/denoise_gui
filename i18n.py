@@ -116,6 +116,15 @@ TEXTS = {
         "msg_done_single": "降噪完成！\n\n已保存至：\n{path}",
         "msg_error_single_title": "错误",
         "msg_error_single": "处理失败：\n{msg}",
+
+        # ── model display names ──
+        "model_display_zipenhancer": "ZipEnhancer (16kHz)",
+        "model_display_dpdfnet_baseline": "DPDFNet - baseline (16kHz, 最快)",
+        "model_display_dpdfnet2": "DPDFNet - dpdfnet2 (16kHz, 实时)",
+        "model_display_dpdfnet4": "DPDFNet - dpdfnet4 (16kHz, 均衡)",
+        "model_display_dpdfnet8": "DPDFNet - dpdfnet8 (16kHz, 最佳)",
+        "model_display_dpdfnet2_48khz_hr": "DPDFNet - dpdfnet2 (48kHz, 均衡)",
+        "model_display_dpdfnet8_48khz_hr": "DPDFNet - dpdfnet8 (48kHz, 最佳)",
     },
 
     "en": {
@@ -260,5 +269,14 @@ TEXTS = {
         "msg_done_single": "Denoising complete!\n\nSaved to:\n{path}",
         "msg_error_single_title": "Error",
         "msg_error_single": "Processing failed:\n{msg}",
+
+        # ── model display names ──
+        "model_display_zipenhancer": "ZipEnhancer (16kHz)",
+        "model_display_dpdfnet_baseline": "DPDFNet - baseline (16kHz, Fastest)",
+        "model_display_dpdfnet2": "DPDFNet - dpdfnet2 (16kHz, Real-time)",
+        "model_display_dpdfnet4": "DPDFNet - dpdfnet4 (16kHz, Balanced)",
+        "model_display_dpdfnet8": "DPDFNet - dpdfnet8 (16kHz, Best)",
+        "model_display_dpdfnet2_48khz_hr": "DPDFNet - dpdfnet2 (48kHz, Balanced)",
+        "model_display_dpdfnet8_48khz_hr": "DPDFNet - dpdfnet8 (48kHz, Best)",
     },
 }
