@@ -51,6 +51,15 @@ pip install -r requirements.nv_gpu.txt
 
 ## Usage / 使用
 
+### 0. Clone the repository / 克隆仓库
+
+```bash
+git clone git@github.com:ErwinLiYH/denoise_gui.git
+cd denoise_gui
+```
+
+### 1. Run / 运行
+
 ```bash
 python main.py
 ```
