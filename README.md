@@ -12,6 +12,13 @@ A deep-learning-based video audio denoising tool supporting two model families:
 
 ## Installation / 安装
 
+### 0. Clone the repository / 克隆仓库
+
+```bash
+git clone git@github.com:ErwinLiYH/denoise_gui.git
+cd denoise_gui
+```
+
 ### 1. Install ffmpeg / 安装 ffmpeg
 
 This tool requires system ffmpeg for video audio extraction and muxing.
@@ -53,23 +60,9 @@ pip install -r requirements.nv_gpu.txt
 
 ## Usage / 使用
 
-### 0. Clone the repository / 克隆仓库
-
-```bash
-git clone git@github.com:ErwinLiYH/denoise_gui.git
-cd denoise_gui
-```
-
-### 1. Run / 运行
-
 ```bash
 python main.py
 ```
-
-1. Click **"选择视频" (Select Video)** to choose a video file / 点击「选择视频」按钮选择视频文件
-2. Select a denoising model from the dropdown / 在下拉框选择降噪模型
-3. Click **"开始降噪" (Start Denoising)** / 点击「开始降噪」
-4. Wait for processing to complete. The denoised video is saved as `originalname_denoised.ext` / 等待处理完成，降噪后的视频自动保存为 `原文件名_denoised.扩展名`
 
 On first use, model weights are downloaded automatically. ZipEnhancer is ~19 MB; DPDFNet is ~8–18 MB depending on the variant.
 首次使用会自动下载模型权重，ZipEnhancer 约 19MB，DPDFNet 按所选模型约 8-18MB。
